@@ -1199,3 +1199,1273 @@ function New-SafeguardTestCertificatePki
     "                `"Name`" = `"CertBoy`";`n }"
     Write-Host "- Test it by getting a token: Connect-Safeguard -Thumbprint `"<thumbprint>`""
 }
+
+<#
+.SYNOPSIS
+Create an administered certificate signing request in Safeguard via the Web API.
+
+.DESCRIPTION
+Safeguard can generate administered certificate signing requests (CSRs) so that private keys never
+leave the system.
+
+This cmdlet creates new CSRs.  Stale CSRs can be deleted via Delete-SafeguardAdministeredCertificateSigningRequest.
+
+.PARAMETER Appliance
+IP address or hostname of a Safeguard appliance.
+
+.PARAMETER AccessToken
+A string containing the bearer token to be used with Safeguard Web API.
+
+.PARAMETER Insecure
+Ignore verification of Safeguard appliance SSL certificate.
+
+.PARAMETER Subject
+A string containing the distinguished name of the subject of the CSR.
+
+.PARAMETER KeyLength
+An integer containing the key length (1024, 2048, 4096, default: 2048).
+
+.PARAMETER IpAddresses
+An array of strings containing IP addresses to use in subject alternative names.
+
+.PARAMETER DnsNames
+An array of strings containing DNS names to use in subject alternative names.
+
+.PARAMETER CertificateAuthority
+Request that the certificate should have the certificate authority attribute (default: false).
+
+.PARAMETER KeyUsageCritical
+Request that the certificate should designate the key usage as critical (default: false).
+
+.PARAMETER ExtendedKeyUsageCritical
+Request that the certificate should designate the extended key usage as critical (default: false).
+
+.PARAMETER KeyUsages
+An array of strings containing the key usages (CertificateSigning, KeyAgreement, KeyEncipherment, NonRepudiation, DigitalSignature).
+
+.PARAMETER ExtendedKeyUsages
+An array of strings containing the extended key usages (ServerAuthentication, ClientAuthentication, CodeSigning, SmartCard, TimeStamping).
+
+.PARAMETER Notes
+Additional notes for the CSR.
+
+.PARAMETER OutFile
+A string containing the path where the CSR file will be saved on the local appliance.
+
+.INPUTS
+None.
+
+.OUTPUTS
+JSON response from Safeguard Web API.
+
+.EXAMPLE
+New-SafeguardAdministeredCertificateSigningRequest -AccessToken $token -Appliance 10.5.32.54
+
+.EXAMPLE
+New-SafeguardAdministeredCertificateSigningRequest "CN=Safeguard,O=OneIdentity" -DnsNames "safeguard.oneidentity.com" -IpAddresses "10.10.10.10" -KeyUsageCritical -ExtendedKeyUsageCritical -KeyUsages @("KeyAgreement","KeyEncipherment","DigitalSignature") -ExtendedKeyUsages @("ClientAuthentication")
+#>
+function New-SafeguardAdministeredCertificateSigningRequest
+{
+    [CmdletBinding()]
+    Param(
+        [Parameter(Mandatory=$false)]
+        [string]$Appliance,
+        [Parameter(Mandatory=$false)]
+        [object]$AccessToken,
+        [Parameter(Mandatory=$false)]
+        [switch]$Insecure,
+        [Parameter(Mandatory=$true,Position=1)]
+        [string]$Subject,
+        [Parameter(Mandatory=$false)]
+        [ValidateSet(1024, 2048, 3072, 4096)]
+        [int]$KeyLength = 2048,
+        [Parameter(Mandatory=$false)]
+        [string[]]$IpAddresses = $null,
+        [Parameter(Mandatory=$false)]
+        [string[]]$DnsNames = $null,
+        [Parameter(Mandatory=$false)]
+        [switch]$CertificateAuthority,
+        [Parameter(Mandatory=$false)]
+        [switch]$KeyUsageCritical,
+        [Parameter(Mandatory=$false)]
+        [switch]$ExtendedKeyUsageCritical,
+        [Parameter(Mandatory=$false)]
+        [ValidateSet('CertificateSigning', 'KeyAgreement', 'KeyEncipherment', 'NonRepudiation', 'DigitalSignature')]
+        [string[]]$KeyUsages,
+        [Parameter(Mandatory=$false)]
+        [ValidateSet('ServerAuthentication', 'ClientAuthentication', 'CodeSigning', 'SmartCard', 'TimeStamping')]
+        [string[]]$ExtendedKeyUsages,
+        [Parameter(Mandatory=$false)]
+        [string]$Notes,
+        [Parameter(Mandatory=$true,Position=2)]
+        [string]$OutFile
+    )
+
+    if (-not $PSBoundParameters.ContainsKey("ErrorAction")) { $ErrorActionPreference = "Stop" }
+    if (-not $PSBoundParameters.ContainsKey("Verbose")) { $VerbosePreference = $PSCmdlet.GetVariableValue("VerbosePreference") }
+
+    $local:Body = @{
+        CsrDetails = @{
+            Subject = $Subject;
+            KeyLength = $KeyLength;
+        }
+    }
+
+    if ($PSBoundParameters.ContainsKey("IpAddresses"))
+    {
+        Import-Module -Name "$PSScriptRoot\ps-utilities.psm1" -Scope Local
+        $IpAddresses | ForEach-Object {
+            if (-not (Test-IpAddress $_))
+            {
+                throw "$_ is not an IP address"
+            }
+        }
+        $local:Body.CsrDetails.IpAddresses = $IpAddresses
+    }
+    if ($PSBoundParameters.ContainsKey("Notes")) { $local:Body.Notes = $Notes }
+    if ($PSBoundParameters.ContainsKey("DnsNames")) { $local:Body.CsrDetails.DnsNames = $DnsNames }
+    if ($PSBoundParameters.ContainsKey("KeyUsages")) { $local:Body.CsrDetails.KeyUsages = $KeyUsages }
+    if ($PSBoundParameters.ContainsKey("ExtendedKeyUsages")) { $local:Body.CsrDetails.ExtendedKeyUsages = $ExtendedKeyUsages }
+    if ($PSBoundParameters.ContainsKey("CertificateAuthority")) { $local:Body.CsrDetails.CertificateAuthority = $true }
+    if ($PSBoundParameters.ContainsKey("KeyUsageCritical")) { $local:Body.CsrDetails.KeyUsageCritical = $true }
+    if ($PSBoundParameters.ContainsKey("ExtendedKeyUsageCritical")) { $local:Body.CsrDetails.ExtendedKeyUsageCritical = $true }
+
+    $local:Csr = (Invoke-SafeguardMethod -AccessToken $AccessToken -Appliance $Appliance -Insecure:$Insecure Core POST "Me/Certificates/Csr" -Body $local:Body)
+    $local:Csr
+    $local:Csr.Base64RequestData | Out-File -Encoding ASCII -FilePath $OutFile -NoNewline
+    Write-Host "CSR saved to '$OutFile'"
+}
+
+<#
+.SYNOPSIS
+Get an administered certificate signing requests that have been generated for Safeguard via the Web API.
+
+.DESCRIPTION
+Safeguard can generate administered certificate signing requests (CSRs) so that private keys never
+leave the system.
+
+This cmdlet gets administered certificate CSRs that are currently outstanding but that have not yet been signed and
+returned to Safeguard.  Stale CSRs can be deleted via Delete-SafeguardAdministeredCertificateSigningRequest.
+
+.PARAMETER Appliance
+IP address or hostname of a Safeguard appliance.
+
+.PARAMETER AccessToken
+A string containing the bearer token to be used with Safeguard Web API.
+
+.PARAMETER Insecure
+Ignore verification of Safeguard appliance SSL certificate.
+
+.PARAMETER CsrId
+An integer containing an ID.
+
+.PARAMETER Subject
+A string containing the subject of a specific CSR.
+
+.PARAMETER Fields
+An array of the asset property names to return.
+
+.INPUTS
+None.
+
+.OUTPUTS
+JSON response from Safeguard Web API.
+
+.EXAMPLE
+Get-SafeguardAdministeredCertificateSigningRequest -AccessToken $token -Appliance 10.5.32.54
+
+.EXAMPLE
+Get-SafeguardAdministeredCertificateSigningRequest "CN=Safeguard,O=OneIdentity"
+#>
+function Get-SafeguardAdministeredCertificateSigningRequest
+{
+    [CmdletBinding(DefaultParameterSetName="None")]
+    Param(
+        [Parameter(Mandatory=$false)]
+        [string]$Appliance,
+        [Parameter(Mandatory=$false)]
+        [object]$AccessToken,
+        [Parameter(Mandatory=$false)]
+        [switch]$Insecure,
+        [Parameter(Mandatory=$false,Position=0)]
+        [int]$CsrId,
+        [Parameter(Mandatory=$false)]
+        [string]$Subject,
+        [Parameter(Mandatory=$false)]
+        [string[]]$Fields
+    )
+
+    if (-not $PSBoundParameters.ContainsKey("ErrorAction")) { $ErrorActionPreference = "Stop" }
+    if (-not $PSBoundParameters.ContainsKey("Verbose")) { $VerbosePreference = $PSCmdlet.GetVariableValue("VerbosePreference") }
+
+    $local:Parameters = $null
+    if ($Fields)
+    {
+        $local:Parameters = @{ fields = ($Fields -join ",")}
+    }
+
+    if ($Subject)
+    {
+        $local:Parameters = @{ filter = "Subject ieq '$Subject'" }
+    }
+
+    if ($PSBoundParameters.ContainsKey("CsrId"))
+    {
+        Invoke-SafeguardMethod -AccessToken $AccessToken -Appliance $Appliance -Insecure:$Insecure Core `
+            GET "Me/Certificates/Csr/$($CsrId)" -Parameters $local:Parameters
+    }
+    else
+    {
+        Invoke-SafeguardMethod -AccessToken $AccessToken -Appliance $Appliance -Insecure:$Insecure Core `
+            GET "Me/Certificates/Csr" -Parameters $local:Parameters
+    }
+}
+
+<#
+.SYNOPSIS
+Edit an existing administered certificate signing request in Safeguard via the Web API.
+
+.DESCRIPTION
+Safeguard can generate administered certificate signing requests (CSRs) so that private keys never
+leave the system.
+
+This cmdlet edits the notes of an administered certificate CSRs that are currently outstanding but that have not yet been signed and
+returned to Safeguard.
+
+.PARAMETER Appliance
+IP address or hostname of a Safeguard appliance.
+
+.PARAMETER AccessToken
+A string containing the bearer token to be used with Safeguard Web API.
+
+.PARAMETER Insecure
+Ignore verification of Safeguard appliance SSL certificate.
+
+.PARAMETER CsrId
+An integer containing an ID.
+
+.PARAMETER Notes
+A string containing the notes for the administered certificate CSR.
+
+.INPUTS
+None.
+
+.OUTPUTS
+JSON response from Safeguard Web API.
+
+.EXAMPLE
+Edit-SafeguardAdministeredCertificateSigningRequest -AccessToken $token -Appliance 10.5.32.54 -Insecure
+
+.EXAMPLE
+Edit-SafeguardAdministeredCertificateSigningRequest 4 -Notes "New CSR for the lab server"
+#>
+function Edit-SafeguardAdministeredCertificateSigningRequest
+{
+    [CmdletBinding(DefaultParameterSetName="Attributes")]
+    Param(
+        [Parameter(Mandatory=$false)]
+        [string]$Appliance,
+        [Parameter(Mandatory=$false)]
+        [object]$AccessToken,
+        [Parameter(Mandatory=$false)]
+        [switch]$Insecure,
+        [Parameter(Mandatory=$true,Position=0)]
+        [int]$CsrId,
+        [Parameter(Mandatory=$false)]
+        [string]$Notes
+    )
+
+    if (-not $PSBoundParameters.ContainsKey("ErrorAction")) { $ErrorActionPreference = "Stop" }
+    if (-not $PSBoundParameters.ContainsKey("Verbose")) { $VerbosePreference = $PSCmdlet.GetVariableValue("VerbosePreference") }
+
+    $local:Body = @{
+        Id = $CsrId;
+    }
+
+    if ($PSBoundParameters.ContainsKey("Notes"))
+    {
+        $local:Body.Notes = $Notes
+    }
+    else
+    {
+        # If there are no notes then there is nothing to update.
+        return
+    }
+
+    Invoke-SafeguardMethod -AccessToken $AccessToken -Appliance $Appliance -Insecure:$Insecure Core PUT "Me/Certificates/Csr/$($CsrId)" -Body $local:Body
+}
+
+<#
+.SYNOPSIS
+Delete an administered certificate signing request that has been generated for Safeguard via the Web API.
+
+.DESCRIPTION
+Safeguard can generate certificate signing requests (CSRs) so that private keys never
+leave the system.
+
+This cmdlet may be used to delete stale CSRs that have not yet been signed and will never be
+returned to Safeguard.  You can find stale CSRs using Get-SafeguardAdministeredCertificateSigningRequest.
+
+.PARAMETER Appliance
+IP address or hostname of a Safeguard appliance.
+
+.PARAMETER AccessToken
+A string containing the bearer token to be used with Safeguard Web API.
+
+.PARAMETER Insecure
+Ignore verification of Safeguard appliance SSL certificate.
+
+.PARAMETER CsrId
+An integer containing an ID.
+
+.INPUTS
+None.
+
+.OUTPUTS
+JSON response from Safeguard Web API.
+
+.EXAMPLE
+Remove-SafeguardAdministeredCertificateSigningRequest 4
+#>
+function Remove-SafeguardAdministeredCertificateSigningRequest
+{
+    [CmdletBinding()]
+    Param(
+        [Parameter(Mandatory=$false)]
+        [string]$Appliance,
+        [Parameter(Mandatory=$false)]
+        [object]$AccessToken,
+        [Parameter(Mandatory=$false)]
+        [switch]$Insecure,
+        [Parameter(Mandatory=$true,Position=0)]
+        [string]$CsrId
+    )
+
+    if (-not $PSBoundParameters.ContainsKey("ErrorAction")) { $ErrorActionPreference = "Stop" }
+    if (-not $PSBoundParameters.ContainsKey("Verbose")) { $VerbosePreference = $PSCmdlet.GetVariableValue("VerbosePreference") }
+
+    Invoke-SafeguardMethod -AccessToken $AccessToken -Appliance $Appliance -Insecure:$Insecure Core DELETE "Me/Certificates/Csr/$($CsrId)"
+}
+
+<#
+.SYNOPSIS
+Create an administered certificate in Safeguard via the Web API.
+
+.DESCRIPTION
+Safeguard can store and share administered certificates.
+
+This cmdlet upload a certificate so that it can be stored and shared with other Safeguard users. If
+the certificate was signed from a CSR that was generated by Safeguard, the uploaded certifidate will
+be matched and stored with the private key that was generated when the CSR was created.
+
+.PARAMETER Appliance
+IP address or hostname of a Safeguard appliance.
+
+.PARAMETER AccessToken
+A string containing the bearer token to be used with Safeguard Web API.
+
+.PARAMETER Insecure
+Ignore verification of Safeguard appliance SSL certificate.
+
+.PARAMETER Notes
+A string containing the notes for the administered certificate.
+
+.PARAMETER NotifyDaysBefore
+A integer that specifies the number of days before the certificate expires that Safeguard
+should start notifying the administered certificate owners.
+
+.PARAMETER NotifyDaysAfter
+A integer that specifies the number of days after the certificate expires that Safeguard
+should continue notifying the administered certificate owners.
+
+.PARAMETER NotifyDaysAfter
+A string containing the notes for the administered certificate CSR.
+
+.PARAMETER PrivateKeyShareable
+Indicates that the private key can be included when the certificate is downloaded.
+
+.PARAMETER PassphraseRequired
+Indicates that a passphrase must be provided by the caller when the certificate is downloaded.
+
+.PARAMETER CertificateFile
+A string containing the path to a certificate in DER or Base64 format.
+
+.PARAMETER Password
+A secure string to be used as a passphrase for the certificate PFX or P12 file.
+
+.INPUTS
+None.
+
+.OUTPUTS
+JSON response from Safeguard Web API.
+
+.EXAMPLE
+New-SafeguardAdministeredCertificateSigningRequest -AccessToken $token -Appliance 10.5.32.54
+
+.EXAMPLE
+New-SafeguardAdministeredCertificate -CertificateFile "c:\cert.pfx" -Password (ConvertTo-SecureString -AsPlainText "TestPassword" -Force)
+#>
+function New-SafeguardAdministeredCertificate
+{
+    [CmdletBinding()]
+    Param(
+        [Parameter(Mandatory=$false)]
+        [string]$Appliance,
+        [Parameter(Mandatory=$false)]
+        [object]$AccessToken,
+        [Parameter(Mandatory=$false)]
+        [switch]$Insecure,
+        [Parameter(Mandatory=$true,Position=0)]
+        [string]$CertificateFile,
+        [Parameter(Mandatory=$false,Position=1)]
+        [SecureString]$Password,
+        [Parameter(Mandatory=$false)]
+        [string]$Notes,
+        [Parameter(Mandatory=$false)]
+        [int]$NotifyDaysBefore = 30,
+        [Parameter(Mandatory=$false)]
+        [int]$NotifyDaysAfter = 30,
+        [Parameter(Mandatory=$false)]
+        [switch]$PrivateKeyShareable,
+        [Parameter(Mandatory=$false)]
+        [switch]$PassphraseRequired
+    )
+
+    if (-not $PSBoundParameters.ContainsKey("ErrorAction")) { $ErrorActionPreference = "Stop" }
+    if (-not $PSBoundParameters.ContainsKey("Verbose")) { $VerbosePreference = $PSCmdlet.GetVariableValue("VerbosePreference") }
+
+    $local:CertificateContents = (Get-CertificateFileContents $CertificateFile)
+    if (-not $CertificateContents)
+    {
+        throw "No valid certificate to upload"
+    }
+
+    if (-not $Password)
+    {
+        Write-Host "For no password just press enter..."
+        $Password = (Read-host "Password" -AsSecureString)
+    }
+    $local:PasswordPlainText = [System.Net.NetworkCredential]::new("", $Password).Password
+
+    $local:Body = @{
+        Base64CertificateData = "$($local:CertificateContents)";
+        Passphrase = "$($local:PasswordPlainText)";
+        NotifyDaysBefore = $NotifyDaysBefore;
+        NotifyDaysAfter = $NotifyDaysAfter;
+    }
+
+    if ($PSBoundParameters.ContainsKey("Notes")) { $local:Body.Notes = $Notes }
+    if ($PSBoundParameters.ContainsKey("PrivateKeyShareable")) { $local:Body.IsPrivateKeyShareable = $true }
+    if ($PSBoundParameters.ContainsKey("PassphraseRequired")) { $local:Body.IsPassphraseRequired = $true }
+
+    Write-Host "Uploading Certificate..."
+    Invoke-SafeguardMethod -AccessToken $AccessToken -Appliance $Appliance -Insecure:$Insecure Core POST "Me/Certificates" -Body $local:Body
+}
+
+<#
+.SYNOPSIS
+Get an administered certificate via the Web API.
+
+.DESCRIPTION
+Safeguard can store and share administered certificates.
+
+This cmdlet gets an existing administered certificate that has been stored in Safeguard.
+
+.PARAMETER Appliance
+IP address or hostname of a Safeguard appliance.
+
+.PARAMETER AccessToken
+A string containing the bearer token to be used with Safeguard Web API.
+
+.PARAMETER Insecure
+Ignore verification of Safeguard appliance SSL certificate.
+
+.PARAMETER CertificateId
+An integer containing the ID of the administered certificate. If the certificate Id is specifed, -Subject and -Thumbprint will be ignored.
+
+.PARAMETER Subject
+A string containing the subject of a specific administered certificate. Cannot be used if -Thumbprint is specified.
+
+.PARAMETER Thumbprint
+A string containing the thumbprint of a specific adminstered certificate. Cannot be used if -Subject is specified.
+
+.PARAMETER Fields
+An array of the asset property names to return.
+
+.INPUTS
+None.
+
+.OUTPUTS
+JSON response from Safeguard Web API.
+
+.EXAMPLE
+Get-SafeguardAdministeredCertificate -AccessToken $token -Appliance 10.5.32.54
+
+.EXAMPLE
+Get-SafeguardAdministeredCertificate -Subject "CN=Safeguard,O=OneIdentity"
+
+.EXAMPLE
+Get-SafeguardAdministeredCertificate -Thumbprint 3E1A99AE7ACFB163DEE3CCAC00A437D675937FCA
+#>
+function Get-SafeguardAdministeredCertificate
+{
+    [CmdletBinding(DefaultParameterSetName="None")]
+    Param(
+        [Parameter(Mandatory=$false)]
+        [string]$Appliance,
+        [Parameter(Mandatory=$false)]
+        [object]$AccessToken,
+        [Parameter(Mandatory=$false)]
+        [switch]$Insecure,
+        [Parameter(Mandatory=$false,Position=0)]
+        [int]$CertificateId,
+        [Parameter(Mandatory=$false)]
+        [string]$Subject,
+        [Parameter(Mandatory=$false)]
+        [string]$Thumbprint,
+        [Parameter(Mandatory=$false)]
+        [string[]]$Fields
+    )
+
+    if (-not $PSBoundParameters.ContainsKey("ErrorAction")) { $ErrorActionPreference = "Stop" }
+    if (-not $PSBoundParameters.ContainsKey("Verbose")) { $VerbosePreference = $PSCmdlet.GetVariableValue("VerbosePreference") }
+
+    $local:Parameters = $null
+    if ($Fields)
+    {
+        $local:Parameters = @{ fields = ($Fields -join ",")}
+    }
+
+    if ($PSBoundParameters.ContainsKey("CertificateId"))
+    {
+        Invoke-SafeguardMethod -AccessToken $AccessToken -Appliance $Appliance -Insecure:$Insecure Core `
+            GET "Me/Certificates/$($CertificateId)" -Parameters $local:Parameters
+    }
+    else
+    {
+        if ($PSBoundParameters.ContainsKey("Subject") -and $PSBoundParameters.ContainsKey("Thumbprint"))
+        {
+            throw "-Subject and -Thumbprint cannot be used in the same command."
+        }
+
+        if ($Subject)
+        {
+            $local:Parameters = @{ filter = "Subject ieq '$Subject'" }
+        }
+
+        if ($Thumbprint)
+        {
+            $local:Parameters = @{ filter = "CertificateDetails.Thumbprint eq '$Thumbprint'" }
+        }
+
+        Invoke-SafeguardMethod -AccessToken $AccessToken -Appliance $Appliance -Insecure:$Insecure Core `
+            GET "Me/Certificates" -Parameters $local:Parameters
+    }
+}
+
+<#
+.SYNOPSIS
+Edit an existing administered certificate via the Web API.
+
+.DESCRIPTION
+Safeguard can store and share administered certificates.
+
+This cmdlet edits an existing administered certificate that has been stored in Safeguard.
+
+.PARAMETER Appliance
+IP address or hostname of a Safeguard appliance.
+
+.PARAMETER AccessToken
+A string containing the bearer token to be used with Safeguard Web API.
+
+.PARAMETER Insecure
+Ignore verification of Safeguard appliance SSL certificate.
+
+.PARAMETER CertificateId
+An integer containing the ID of the administered certificate.
+
+.PARAMETER Notes
+A string containing the notes for the administered certificate.
+
+.PARAMETER NotifyDaysBefore
+A integer that specifies the number of days before the certificate expires that Safeguard
+should start notifying the administered certificate owners.
+
+.PARAMETER NotifyDaysAfter
+A integer that specifies the number of days after the certificate expires that Safeguard
+should continue notifying the administered certificate owners.
+
+.PARAMETER NotifyDaysAfter
+A string containing the notes for the administered certificate CSR.
+
+.PARAMETER PrivateKeyShareable
+Indicates that the private key can be included when the certificate is downloaded.
+
+.PARAMETER PassphraseRequired
+Indicates that a passphrase must be provided by the caller when the certificate is downloaded.
+
+.PARAMETER CertificateFile
+A string containing the path to a certificate in DER or Base64 format.
+
+.PARAMETER Password
+A secure string to be used as a passphrase for the certificate PFX or P12 file.
+
+.INPUTS
+None.
+
+.OUTPUTS
+JSON response from Safeguard Web API.
+
+.EXAMPLE
+Edit-SafeguardAdministeredCertificate -AccessToken $token -Appliance 10.5.32.54 -Insecure
+
+.EXAMPLE
+Edit-SafeguardAdministeredCertificate 4 -Notes "Updated with a new certificate" -CertificateFile "c:\cert2.pfx"
+#>
+function Edit-SafeguardAdministeredCertificate
+{
+    [CmdletBinding(DefaultParameterSetName="Attributes")]
+    Param(
+        [Parameter(Mandatory=$false)]
+        [string]$Appliance,
+        [Parameter(Mandatory=$false)]
+        [object]$AccessToken,
+        [Parameter(Mandatory=$false)]
+        [switch]$Insecure,
+        [Parameter(Mandatory=$true,Position=0)]
+        [int]$CertificateId,
+        [Parameter(Mandatory=$false)]
+        [string]$Notes,
+        [Parameter(Mandatory=$false)]
+        [int]$NotifyDaysBefore,
+        [Parameter(Mandatory=$false)]
+        [int]$NotifyDaysAfter,
+        [Parameter(Mandatory=$false)]
+        [switch]$PrivateKeyShareable,
+        [Parameter(Mandatory=$false)]
+        [switch]$PassphraseRequired,
+        [Parameter(Mandatory=$false)]
+        [string]$CertificateFile,
+        [Parameter(Mandatory=$false)]
+        [SecureString]$Password
+    )
+
+    if (-not $PSBoundParameters.ContainsKey("ErrorAction")) { $ErrorActionPreference = "Stop" }
+    if (-not $PSBoundParameters.ContainsKey("Verbose")) { $VerbosePreference = $PSCmdlet.GetVariableValue("VerbosePreference") }
+
+    $local:Body = @{
+        Id = $CertificateId;
+    }
+
+    if ($PSBoundParameters.ContainsKey("CertificateFile"))
+    {
+        $local:CertificateContents = (Get-CertificateFileContents $CertificateFile)
+        if (-not $CertificateContents)
+        {
+            throw "No valid certificate to upload"
+        }
+
+        if (-not $Password)
+        {
+            Write-Host "For no password just press enter..."
+            $Password = (Read-host "Password" -AsSecureString)
+        }
+        $local:PasswordPlainText = [System.Net.NetworkCredential]::new("", $Password).Password
+
+        $local:Body.Base64CertificateData = "$($local:CertificateContents)";
+        $local:Body.Passphrase = "$($local:PasswordPlainText)";
+    }
+
+    if ($PSBoundParameters.ContainsKey("Notes")) { $local:Body.Notes = $Notes }
+    if ($PSBoundParameters.ContainsKey("PrivateKeyShareable")) { $local:Body.IsPrivateKeyShareable = $true }
+    if ($PSBoundParameters.ContainsKey("PassphraseRequired")) { $local:Body.IsPassphraseRequired = $true }
+    if ($PSBoundParameters.ContainsKey("NotifyDaysBefore")) { $local:Body.NotifyDaysBefore = $NotifyDaysBefore }
+    if ($PSBoundParameters.ContainsKey("NotifyDaysAfter")) { $local:Body.NotifyDaysAfter = $NotifyDaysAfter }
+
+    Invoke-SafeguardMethod -AccessToken $AccessToken -Appliance $Appliance -Insecure:$Insecure Core PUT "Me/Certificates/$($CertificateId)" -Body $local:Body
+}
+
+<#
+.SYNOPSIS
+Delete an administered certificate via the Web API.
+
+.DESCRIPTION
+Safeguard can store and share administered certificates.
+
+This cmdlet deletes an existing administered certificate that has been stored in Safeguard.
+
+.PARAMETER Appliance
+IP address or hostname of a Safeguard appliance.
+
+.PARAMETER AccessToken
+A string containing the bearer token to be used with Safeguard Web API.
+
+.PARAMETER Insecure
+Ignore verification of Safeguard appliance SSL certificate.
+
+.PARAMETER CertificateId
+An integer containing the ID of the administered certificate.
+
+.INPUTS
+None.
+
+.OUTPUTS
+JSON response from Safeguard Web API.
+
+.EXAMPLE
+Remove-SafeguardAdministeredCertificate 4
+#>
+function Remove-SafeguardAdministeredCertificate
+{
+    [CmdletBinding()]
+    Param(
+        [Parameter(Mandatory=$false)]
+        [string]$Appliance,
+        [Parameter(Mandatory=$false)]
+        [object]$AccessToken,
+        [Parameter(Mandatory=$false)]
+        [switch]$Insecure,
+        [Parameter(Mandatory=$true,Position=0)]
+        [string]$CertificateId
+    )
+
+    if (-not $PSBoundParameters.ContainsKey("ErrorAction")) { $ErrorActionPreference = "Stop" }
+    if (-not $PSBoundParameters.ContainsKey("Verbose")) { $VerbosePreference = $PSCmdlet.GetVariableValue("VerbosePreference") }
+
+    Invoke-SafeguardMethod -AccessToken $AccessToken -Appliance $Appliance -Insecure:$Insecure Core DELETE "Me/Certificates/$($CertificateId)"
+}
+
+<#
+.SYNOPSIS
+Create an administered certificate share via the Web API.
+
+.DESCRIPTION
+Safeguard can store and share administered certificates. The adminstered certificates can be shared
+with other Safeguard users or user groups.
+
+This cmdlet creates a new administered certificate share with a share expiration date.
+
+.PARAMETER Appliance
+IP address or hostname of a Safeguard appliance.
+
+.PARAMETER AccessToken
+A string containing the bearer token to be used with Safeguard Web API.
+
+.PARAMETER Insecure
+Ignore verification of Safeguard appliance SSL certificate.
+
+.PARAMETER CertificateId
+An integer containing the ID of the administered certificate.
+
+.PARAMETER UserId
+An integer containing the ID of a Safeguard user with whom the certificate should be shared.
+
+.PARAMETER GroupId
+An integer containing the ID of a Safeguard user group with whom the certificate should be shared.
+
+.PARAMETER ExpirationDate
+A DateTime containing the UTC date/time when the share expires.  For example: "2024-10-17T12:11:12Z".
+
+.INPUTS
+None.
+
+.OUTPUTS
+JSON response from Safeguard Web API.
+
+.EXAMPLE
+New-SafeguardAdministeredCertificateShare -AccessToken $token -Appliance 10.5.32.54
+
+.EXAMPLE
+New-SafeguardAdministeredCertificateShare -CertificateId 4 -UserId 12 -ExpirationDate 2024-10-17T12:11:12Z
+
+.EXAMPLE
+New-SafeguardAdministeredCertificateShare -CertificateId 4 -GroupId 5
+#>
+function New-SafeguardAdministeredCertificateShare
+{
+    [CmdletBinding()]
+    Param(
+        [Parameter(Mandatory=$false)]
+        [string]$Appliance,
+        [Parameter(Mandatory=$false)]
+        [object]$AccessToken,
+        [Parameter(Mandatory=$false)]
+        [switch]$Insecure,
+        [Parameter(Mandatory=$true,Position=0)]
+        [int]$CertificateId,
+        [Parameter(Mandatory=$false)]
+        [int]$UserId,
+        [Parameter(Mandatory=$false)]
+        [int]$GroupId,
+        [Parameter(Mandatory=$false)]
+        [DateTime]$ExpirationDate
+    )
+
+    if (-not $PSBoundParameters.ContainsKey("ErrorAction")) { $ErrorActionPreference = "Stop" }
+    if (-not $PSBoundParameters.ContainsKey("Verbose")) { $VerbosePreference = $PSCmdlet.GetVariableValue("VerbosePreference") }
+
+    if ($PSBoundParameters.ContainsKey("UserId") -and $PSBoundParameters.ContainsKey("GroupId"))
+    {
+        throw "-UserId and -GroupId cannot be used in the same command."
+    }
+
+    if (!$PSBoundParameters.ContainsKey("UserId") -and !$PSBoundParameters.ContainsKey("GroupId"))
+    {
+        throw "Either -UserId or -GroupId must be specified."
+    }
+
+    $local:Body = @{
+        AdministeredCertificateId = $CertificateId;
+    }
+
+    if ($PSBoundParameters.ContainsKey("UserId"))
+    {
+        $local:Body.SharedWithId = $UserId
+        $local:Body.ShareType = "User"
+    }
+
+    if ($PSBoundParameters.ContainsKey("GroupId"))
+    {
+        $local:Body.SharedWithId = $GroupId
+        $local:Body.ShareType = "Group"
+    }
+
+    if ($PSBoundParameters.ContainsKey("ExpirationDate")) { $local:Body.SharedExpirationDate = $ExpirationDate }
+
+    Invoke-SafeguardMethod -AccessToken $AccessToken -Appliance $Appliance -Insecure:$Insecure Core POST "Me/Certificates/$($CertificateId)/Share" -Body $local:Body
+}
+
+<#
+.SYNOPSIS
+Get an administered certificate share via the Web API.
+
+.DESCRIPTION
+Safeguard can store and share administered certificates.
+
+This cmdlet edits an existing administered certificate share that has been stored in Safeguard.
+
+.PARAMETER Appliance
+IP address or hostname of a Safeguard appliance.
+
+.PARAMETER AccessToken
+A string containing the bearer token to be used with Safeguard Web API.
+
+.PARAMETER Insecure
+Ignore verification of Safeguard appliance SSL certificate.
+
+.PARAMETER CertificateId
+An integer containing the ID of the administered certificate.
+
+.PARAMETER UserId
+An integer containing the ID of a Safeguard user with whom the certificate should be shared.
+
+.PARAMETER GroupId
+An integer containing the ID of a Safeguard user group with whom the certificate should be shared.
+
+.PARAMETER Fields
+An array of the asset property names to return.
+
+.INPUTS
+None.
+
+.OUTPUTS
+JSON response from Safeguard Web API.
+
+.EXAMPLE
+Get-SafeguardAdministeredCertificateShare -AccessToken $token -Appliance 10.5.32.54
+
+.EXAMPLE
+Get-SafeguardAdministeredCertificateShare -CertificateId 4 -GroupId 5
+#>
+function Get-SafeguardAdministeredCertificateShare
+{
+    [CmdletBinding(DefaultParameterSetName="None")]
+    Param(
+        [Parameter(Mandatory=$false)]
+        [string]$Appliance,
+        [Parameter(Mandatory=$false)]
+        [object]$AccessToken,
+        [Parameter(Mandatory=$false)]
+        [switch]$Insecure,
+        [Parameter(Mandatory=$true,Position=0)]
+        [int]$CertificateId,
+        [Parameter(Mandatory=$false)]
+        [int]$UserId,
+        [Parameter(Mandatory=$false)]
+        [int]$GroupId,
+        [Parameter(Mandatory=$false)]
+        [string[]]$Fields
+    )
+
+    if (-not $PSBoundParameters.ContainsKey("ErrorAction")) { $ErrorActionPreference = "Stop" }
+    if (-not $PSBoundParameters.ContainsKey("Verbose")) { $VerbosePreference = $PSCmdlet.GetVariableValue("VerbosePreference") }
+
+    if ($PSBoundParameters.ContainsKey("UserId") -and $PSBoundParameters.ContainsKey("GroupId"))
+    {
+        throw "-UserId and -GroupId cannot be used in the same command."
+    }
+
+    $local:Parameters = $null
+    if ($Fields)
+    {
+        $local:Parameters = @{ fields = ($Fields -join ",")}
+    }
+
+    if ($PSBoundParameters.ContainsKey("UserId"))
+    {
+        $local:ShareType = "User"
+        $local:ShareWithId = $UserId
+    }
+
+    if ($PSBoundParameters.ContainsKey("GroupId"))
+    {
+        $local:ShareType = "Group"
+        $local:ShareWithId = $GroupId
+    }
+
+    if ($local:ShareType)
+    {
+        Invoke-SafeguardMethod -AccessToken $AccessToken -Appliance $Appliance -Insecure:$Insecure Core `
+            GET "Me/Certificates/$($CertificateId)/Share/$($local:ShareWithId)?type=$($local:ShareType)" -Parameters $local:Parameters
+    }
+    else
+    {
+        Invoke-SafeguardMethod -AccessToken $AccessToken -Appliance $Appliance -Insecure:$Insecure Core `
+            GET "Me/Certificates/$($CertificateId)/Share" -Parameters $local:Parameters
+    }
+}
+
+<#
+.SYNOPSIS
+Edit an existing administered certificate share via the Web API.
+
+.DESCRIPTION
+Safeguard can store and share administered certificates.
+
+This cmdlet edits an existing administered certificate share that has been stored in Safeguard.
+
+.PARAMETER Appliance
+IP address or hostname of a Safeguard appliance.
+
+.PARAMETER AccessToken
+A string containing the bearer token to be used with Safeguard Web API.
+
+.PARAMETER Insecure
+Ignore verification of Safeguard appliance SSL certificate.
+
+.PARAMETER CertificateId
+An integer containing the ID of the administered certificate.
+
+.PARAMETER UserId
+An integer containing the ID of a Safeguard user with whom the certificate should be shared.
+
+.PARAMETER GroupId
+An integer containing the ID of a Safeguard user group with whom the certificate should be shared.
+
+.PARAMETER ExpirationDate
+A DateTime containing the UTC date/time when the share expires.  For example: "2024-10-17T12:11:12Z".
+
+.INPUTS
+None.
+
+.OUTPUTS
+JSON response from Safeguard Web API.
+
+.EXAMPLE
+Edit-SafeguardAdministeredCertificateShare -AccessToken $token -Appliance 10.5.32.54
+
+.EXAMPLE
+Edit-SafeguardAdministeredCertificateShare -CertificateId 4 -UserId 12 -ExpirationDate 2024-10-17T12:11:12Z
+
+.EXAMPLE
+Edit-SafeguardAdministeredCertificateShare -CertificateId 4 -GroupId 5
+#>
+function Edit-SafeguardAdministeredCertificateShare
+{
+    [CmdletBinding(DefaultParameterSetName="Attributes")]
+    Param(
+        [Parameter(Mandatory=$false)]
+        [string]$Appliance,
+        [Parameter(Mandatory=$false)]
+        [object]$AccessToken,
+        [Parameter(Mandatory=$false)]
+        [switch]$Insecure,
+        [Parameter(Mandatory=$true,Position=0)]
+        [int]$CertificateId,
+        [Parameter(Mandatory=$false)]
+        [int]$UserId,
+        [Parameter(Mandatory=$false)]
+        [int]$GroupId,
+        [Parameter(Mandatory=$false)]
+        [DateTime]$ExpirationDate
+    )
+
+    if (-not $PSBoundParameters.ContainsKey("ErrorAction")) { $ErrorActionPreference = "Stop" }
+    if (-not $PSBoundParameters.ContainsKey("Verbose")) { $VerbosePreference = $PSCmdlet.GetVariableValue("VerbosePreference") }
+
+    if ($PSBoundParameters.ContainsKey("UserId") -and $PSBoundParameters.ContainsKey("GroupId"))
+    {
+        throw "-UserId and -GroupId cannot be used in the same command."
+    }
+
+    if (!$PSBoundParameters.ContainsKey("UserId") -and !$PSBoundParameters.ContainsKey("GroupId"))
+    {
+        throw "Either -UserId or -GroupId must be specified."
+    }
+
+    $local:Body = @{
+        AdministeredCertificateId = $CertificateId;
+    }
+
+    if ($PSBoundParameters.ContainsKey("UserId"))
+    {
+        $local:Body.SharedWithId = $UserId
+        $local:Body.ShareType = "User"
+        $local:ShareWithId = $UserId
+    }
+
+    if ($PSBoundParameters.ContainsKey("GroupId"))
+    {
+        $local:Body.SharedWithId = $GroupId
+        $local:Body.ShareType = "Group"
+        $local:ShareWithId = $GroupId
+    }
+
+    if ($PSBoundParameters.ContainsKey("ExpirationDate")) { $local:Body.ShareExpirationDate = $ExpirationDate }
+
+    Invoke-SafeguardMethod -AccessToken $AccessToken -Appliance $Appliance -Insecure:$Insecure Core PUT "Me/Certificates/$($CertificateId)/Share/$($local:ShareWithId)" -Body $local:Body
+}
+
+<#
+.SYNOPSIS
+Delete an administered certificate share via the Web API.
+
+.DESCRIPTION
+Safeguard can store and share administered certificates.
+
+This cmdlet deletes an existing administered certificate share that has been stored in Safeguard.
+
+.PARAMETER Appliance
+IP address or hostname of a Safeguard appliance.
+
+.PARAMETER AccessToken
+A string containing the bearer token to be used with Safeguard Web API.
+
+.PARAMETER Insecure
+Ignore verification of Safeguard appliance SSL certificate.
+
+.PARAMETER CertificateId
+An integer containing the ID of the administered certificate.
+
+.PARAMETER UserId
+An integer containing the ID of a Safeguard user with whom the certificate should be shared.
+
+.PARAMETER GroupId
+An integer containing the ID of a Safeguard user group with whom the certificate should be shared.
+
+.INPUTS
+None.
+
+.OUTPUTS
+JSON response from Safeguard Web API.
+
+.EXAMPLE
+Edit-SafeguardAdministeredCertificateShare -CertificateId 4 -GroupId 5
+#>
+function Remove-SafeguardAdministeredCertificateShare
+{
+    [CmdletBinding()]
+    Param(
+        [Parameter(Mandatory=$false)]
+        [string]$Appliance,
+        [Parameter(Mandatory=$false)]
+        [object]$AccessToken,
+        [Parameter(Mandatory=$false)]
+        [switch]$Insecure,
+        [Parameter(Mandatory=$true,Position=0)]
+        [int]$CertificateId,
+        [Parameter(Mandatory=$false)]
+        [int]$UserId,
+        [Parameter(Mandatory=$false)]
+        [int]$GroupId
+    )
+
+    if (-not $PSBoundParameters.ContainsKey("ErrorAction")) { $ErrorActionPreference = "Stop" }
+    if (-not $PSBoundParameters.ContainsKey("Verbose")) { $VerbosePreference = $PSCmdlet.GetVariableValue("VerbosePreference") }
+
+    if ($PSBoundParameters.ContainsKey("UserId") -and $PSBoundParameters.ContainsKey("GroupId"))
+    {
+        throw "-UserId and -GroupId cannot be used in the same command."
+    }
+
+    if (!$PSBoundParameters.ContainsKey("UserId") -and !$PSBoundParameters.ContainsKey("GroupId"))
+    {
+        throw "Either -UserId or -GroupId must be specified."
+    }
+
+    if ($PSBoundParameters.ContainsKey("UserId"))
+    {
+        $local:ShareType = "User"
+        $local:ShareWithId = $UserId
+    }
+
+    if ($PSBoundParameters.ContainsKey("GroupId"))
+    {
+        $local:ShareType = "Group"
+        $local:ShareWithId = $GroupId
+    }
+
+    Invoke-SafeguardMethod -AccessToken $AccessToken -Appliance $Appliance -Insecure:$Insecure Core `
+        DELETE "Me/Certificates/$($CertificateId)/Share/$($local:ShareWithId)?type=$($local:ShareType)"
+}
+
+<#
+.SYNOPSIS
+Get an administered certificate history via the Web API.
+
+.DESCRIPTION
+Safeguard can store and share administered certificates.
+
+This cmdlet gets the history for an existing administered certificate that has been stored in Safeguard.
+
+.PARAMETER Appliance
+IP address or hostname of a Safeguard appliance.
+
+.PARAMETER AccessToken
+A string containing the bearer token to be used with Safeguard Web API.
+
+.PARAMETER Insecure
+Ignore verification of Safeguard appliance SSL certificate.
+
+.PARAMETER CertificateId
+An integer containing the ID of the administered certificate. If the certificate Id is specifed, -Subject and -Thumbprint will be ignored.
+
+.PARAMETER Days
+Number of days of data to retrieve.
+
+.INPUTS
+None.
+
+.OUTPUTS
+JSON response from Safeguard Web API.
+
+.EXAMPLE
+Get-SafeguardAdministeredCertificateHistory -AccessToken $token -Appliance 10.5.32.54
+
+.EXAMPLE
+Get-SafeguardAdministeredCertificateHistory 12 -Days 5
+
+#>
+function Get-SafeguardAdministeredCertificateHistory
+{
+    [CmdletBinding(DefaultParameterSetName="None")]
+    Param(
+        [Parameter(Mandatory=$false)]
+        [string]$Appliance,
+        [Parameter(Mandatory=$false)]
+        [object]$AccessToken,
+        [Parameter(Mandatory=$false)]
+        [switch]$Insecure,
+        [Parameter(Mandatory=$true,Position=0)]
+        [int]$CertificateId,
+        [Parameter(Mandatory=$false)]
+        [int]$Days = 30
+    )
+
+    if (-not $PSBoundParameters.ContainsKey("ErrorAction")) { $ErrorActionPreference = "Stop" }
+    if (-not $PSBoundParameters.ContainsKey("Verbose")) { $VerbosePreference = $PSCmdlet.GetVariableValue("VerbosePreference") }
+
+    $local:PastDays = (0 - $Days)
+    $LocalDate = (Get-Date).AddDays($local:PastDays)
+    $local:DayOnly = (New-Object "System.DateTime" -ArgumentList $LocalDate.Year, $LocalDate.Month, $LocalDate.Day)
+
+    Invoke-SafeguardMethod -AccessToken $AccessToken -Appliance $Appliance -Insecure:$Insecure Core `
+        GET "Me/Certificates/$($CertificateId)/CertificateHistory" -Parameters @{ startDate = (Format-DateTimeAsString $local:DayOnly) }
+
+}
+
+<#
+.SYNOPSIS
+Download an administered certificate via the Web API.
+
+.DESCRIPTION
+Safeguard can store and share administered certificates.
+
+This cmdlet downloads an existing administered certificate that is either owned by or shared with a Safeguard user.
+
+.PARAMETER Appliance
+IP address or hostname of a Safeguard appliance.
+
+.PARAMETER AccessToken
+A string containing the bearer token to be used with Safeguard Web API.
+
+.PARAMETER Insecure
+Ignore verification of Safeguard appliance SSL certificate.
+
+.PARAMETER CertificateId
+An integer containing the ID of the administered certificate. If the certificate Id is specifed, -Subject and -Thumbprint will be ignored.
+
+.PARAMETER IncludePrivateKey
+Include the private key in the downloaded certificate if available.
+
+.PARAMETER Password
+A secure string to be applied as a passphrase for the downloaded certificate PFX or P12 file.
+
+.PARAMETER OutFile
+A string containing the path where the downloaded certificate file will be saved on the local appliance.
+
+.INPUTS
+None.
+
+.OUTPUTS
+JSON response from Safeguard Web API.
+
+.EXAMPLE
+Get-SafeguardAdministeredCertificateDownload -AccessToken $token -Appliance 10.5.32.54
+
+.EXAMPLE
+Get-SafeguardAdministeredCertificateDownload -CertificateId 5
+
+#>
+function Save-SafeguardAdministeredCertificate
+{
+    [CmdletBinding(DefaultParameterSetName="None")]
+    Param(
+        [Parameter(Mandatory=$false)]
+        [string]$Appliance,
+        [Parameter(Mandatory=$false)]
+        [object]$AccessToken,
+        [Parameter(Mandatory=$false)]
+        [switch]$Insecure,
+        [Parameter(Mandatory=$true,Position=0)]
+        [int]$CertificateId,
+        [Parameter(Mandatory=$true,Position=1)]
+        [string]$OutFile,
+        [Parameter(Mandatory=$false)]
+        [SecureString]$Password,
+        [Parameter(Mandatory=$false)]
+        [switch]$IncludePrivateKey
+    )
+
+    if (-not $PSBoundParameters.ContainsKey("ErrorAction")) { $ErrorActionPreference = "Stop" }
+    if (-not $PSBoundParameters.ContainsKey("Verbose")) { $VerbosePreference = $PSCmdlet.GetVariableValue("VerbosePreference") }
+
+    if (-not $Password)
+    {
+        Write-Host "For no password just press enter..."
+        $Password = (Read-host "Password" -AsSecureString)
+    }
+    $local:PasswordPlainText = [System.Net.NetworkCredential]::new("", $Password).Password
+
+    $local:Body = @{
+        PassPhrase = "$($local:PasswordPlainText)";
+    }
+
+    if ($PSBoundParameters.ContainsKey("IncludePrivateKey")) { $local:Body.IncludePrivateKey = $true }
+
+    $local:Cert = (Invoke-SafeguardMethod -AccessToken $AccessToken -Appliance $Appliance -Insecure:$Insecure Core `
+        POST "Me/Certificates/$($CertificateId)/Download" -Body $local:Body -Parameters $local:Parameters)
+    $local:Cert
+    $local:Cert | Out-File -FilePath $OutFile -NoNewline
+    Write-Host "Certificate saved to '$OutFile'"
+}
