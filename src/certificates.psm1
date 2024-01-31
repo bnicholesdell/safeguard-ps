@@ -2321,77 +2321,14 @@ function Remove-SafeguardAdministeredCertificateShare
 
 <#
 .SYNOPSIS
-Get an administered certificate history via the Web API.
-
-.DESCRIPTION
-Safeguard can store and share administered certificates.
-
-This cmdlet gets the history for an existing administered certificate that has been stored in Safeguard.
-
-.PARAMETER Appliance
-IP address or hostname of a Safeguard appliance.
-
-.PARAMETER AccessToken
-A string containing the bearer token to be used with Safeguard Web API.
-
-.PARAMETER Insecure
-Ignore verification of Safeguard appliance SSL certificate.
-
-.PARAMETER CertificateId
-An integer containing the ID of the administered certificate. If the certificate Id is specifed, -Subject and -Thumbprint will be ignored.
-
-.PARAMETER Days
-Number of days of data to retrieve.
-
-.INPUTS
-None.
-
-.OUTPUTS
-JSON response from Safeguard Web API.
-
-.EXAMPLE
-Get-SafeguardAdministeredCertificateHistory -AccessToken $token -Appliance 10.5.32.54
-
-.EXAMPLE
-Get-SafeguardAdministeredCertificateHistory 12 -Days 5
-
-#>
-function Get-SafeguardAdministeredCertificateHistory
-{
-    [CmdletBinding(DefaultParameterSetName="None")]
-    Param(
-        [Parameter(Mandatory=$false)]
-        [string]$Appliance,
-        [Parameter(Mandatory=$false)]
-        [object]$AccessToken,
-        [Parameter(Mandatory=$false)]
-        [switch]$Insecure,
-        [Parameter(Mandatory=$true,Position=0)]
-        [int]$CertificateId,
-        [Parameter(Mandatory=$false)]
-        [int]$Days = 30
-    )
-
-    if (-not $PSBoundParameters.ContainsKey("ErrorAction")) { $ErrorActionPreference = "Stop" }
-    if (-not $PSBoundParameters.ContainsKey("Verbose")) { $VerbosePreference = $PSCmdlet.GetVariableValue("VerbosePreference") }
-
-    $local:PastDays = (0 - $Days)
-    $LocalDate = (Get-Date).AddDays($local:PastDays)
-    $local:DayOnly = (New-Object "System.DateTime" -ArgumentList $LocalDate.Year, $LocalDate.Month, $LocalDate.Day)
-
-    Invoke-SafeguardMethod -AccessToken $AccessToken -Appliance $Appliance -Insecure:$Insecure Core `
-        GET "Me/Certificates/$($CertificateId)/CertificateHistory" -Parameters @{ startDate = (Format-DateTimeAsString $local:DayOnly) }
-
-}
-
-<#
-.SYNOPSIS
 Download an administered certificate via the Web API.
 
 .DESCRIPTION
 Safeguard can store and share administered certificates.
 
 This cmdlet downloads an existing administered certificate that is either owned by or shared with a Safeguard user.
+If the parameters -Password or -IncludePrivateKey are included in the command, the certificate will be downloaded in
+PKCS12 (PFX) format.  Otherwise, the certificate will be downloaded in X509 format.
 
 .PARAMETER Appliance
 IP address or hostname of a Safeguard appliance.
@@ -2421,10 +2358,10 @@ None.
 JSON response from Safeguard Web API.
 
 .EXAMPLE
-Get-SafeguardAdministeredCertificateDownload -AccessToken $token -Appliance 10.5.32.54
+Save-SafeguardAdministeredCertificate -AccessToken $token -Appliance 10.5.32.54
 
 .EXAMPLE
-Get-SafeguardAdministeredCertificateDownload -CertificateId 5
+Save-SafeguardAdministeredCertificate -CertificateId 5
 
 #>
 function Save-SafeguardAdministeredCertificate
@@ -2457,15 +2394,165 @@ function Save-SafeguardAdministeredCertificate
     }
     $local:PasswordPlainText = [System.Net.NetworkCredential]::new("", $Password).Password
 
-    $local:Body = @{
-        PassPhrase = "$($local:PasswordPlainText)";
-    }
+    $local:Body = @{  }
 
+    if ($local:PasswordPlainText) { $local:Body.PassPhrase = "$($local:PasswordPlainText)" }
     if ($PSBoundParameters.ContainsKey("IncludePrivateKey")) { $local:Body.IncludePrivateKey = $true }
 
-    $local:Cert = (Invoke-SafeguardMethod -AccessToken $AccessToken -Appliance $Appliance -Insecure:$Insecure Core `
-        POST "Me/Certificates/$($CertificateId)/Download" -Body $local:Body -Parameters $local:Parameters)
-    $local:Cert
-    $local:Cert | Out-File -FilePath $OutFile -NoNewline
+    Invoke-SafeguardMethod -AccessToken $AccessToken -Appliance $Appliance -Insecure:$Insecure Core `
+        POST "Me/Certificates/$($CertificateId)/Download" -Body $local:Body -Parameters $local:Parameters -OutFile $OutFile
     Write-Host "Certificate saved to '$OutFile'"
+}
+
+<#
+.SYNOPSIS
+Get the history of an administered certificate via the Web API.
+
+.DESCRIPTION
+Safeguard can store and share administered certificates.
+
+This cmdlet gets the history for an existing administered certificate that has been stored in Safeguard.
+
+.PARAMETER Appliance
+IP address or hostname of a Safeguard appliance.
+
+.PARAMETER AccessToken
+A string containing the bearer token to be used with Safeguard Web API.
+
+.PARAMETER Insecure
+Ignore verification of Safeguard appliance SSL certificate.
+
+.PARAMETER CertificateId
+An integer containing the ID of the administered certificate.
+
+.PARAMETER Days
+Number of days of data to retrieve.
+
+.PARAMETER EventId
+The event id for the administered certificate event.
+
+.INPUTS
+None.
+
+.OUTPUTS
+JSON response from Safeguard Web API.
+
+.EXAMPLE
+Get-SafeguardAdministeredCertificateHistory -AccessToken $token -Appliance 10.5.32.54
+
+.EXAMPLE
+Get-SafeguardAdministeredCertificateHistory 12 -Days 5
+
+.EXAMPLE
+Get-SafeguardAdministeredCertificateHistory 12 -EventId 638422571883650000
+
+#>
+function Get-SafeguardAdministeredCertificateHistory
+{
+    [CmdletBinding(DefaultParameterSetName="None")]
+    Param(
+        [Parameter(Mandatory=$false)]
+        [string]$Appliance,
+        [Parameter(Mandatory=$false)]
+        [object]$AccessToken,
+        [Parameter(Mandatory=$false)]
+        [switch]$Insecure,
+        [Parameter(Mandatory=$true,Position=0)]
+        [int]$CertificateId,
+        [Parameter(Mandatory=$false)]
+        [int]$Days = 30,
+        [Parameter(Mandatory=$false)]
+        [long]$EventId
+    )
+
+    if (-not $PSBoundParameters.ContainsKey("ErrorAction")) { $ErrorActionPreference = "Stop" }
+    if (-not $PSBoundParameters.ContainsKey("Verbose")) { $VerbosePreference = $PSCmdlet.GetVariableValue("VerbosePreference") }
+
+    $local:PastDays = (0 - $Days)
+    $LocalDate = (Get-Date).AddDays($local:PastDays)
+    $local:DayOnly = (New-Object "System.DateTime" -ArgumentList $LocalDate.Year, $LocalDate.Month, $LocalDate.Day)
+
+    if ($PSBoundParameters.ContainsKey("Days") -and $PSBoundParameters.ContainsKey("EventId"))
+    {
+        throw "-Days and -EventId cannot be used in the same command."
+    }
+
+    if ($PSBoundParameters.ContainsKey("EventId"))
+    {
+        Invoke-SafeguardMethod -AccessToken $AccessToken -Appliance $Appliance -Insecure:$Insecure Core `
+            GET "Me/Certificates/$($CertificateId)/CertificateHistory/$($EventId)"
+    }
+    else
+    {
+        Invoke-SafeguardMethod -AccessToken $AccessToken -Appliance $Appliance -Insecure:$Insecure Core `
+            GET "Me/Certificates/$($CertificateId)/CertificateHistory" -Parameters @{ startDate = (Format-DateTimeAsString $local:DayOnly) }
+    }
+
+}
+
+<#
+.SYNOPSIS
+Download an administered certificate from a history event via the Web API.
+
+.DESCRIPTION
+Safeguard can store and share administered certificates.
+
+This cmdlet downloads a certificate from an existing administered certificate history event.
+The certificate will be downloaded in PKCS12 (PFX) format.
+
+.PARAMETER Appliance
+IP address or hostname of a Safeguard appliance.
+
+.PARAMETER AccessToken
+A string containing the bearer token to be used with Safeguard Web API.
+
+.PARAMETER Insecure
+Ignore verification of Safeguard appliance SSL certificate.
+
+.PARAMETER CertificateId
+An integer containing the ID of the administered certificate.
+
+.PARAMETER EventId
+The event id for the administered certificate event.
+
+.PARAMETER OutFile
+A string containing the path where the downloaded certificate file will be saved on the local appliance.
+
+.INPUTS
+None.
+
+.OUTPUTS
+JSON response from Safeguard Web API.
+
+.EXAMPLE
+Get-SafeguardAdministeredCertificateHistory -AccessToken $token -Appliance 10.5.32.54
+
+.EXAMPLE
+Save-SafeguardAdministeredCertificateHistory -CertificateId 5 -EventId 638422571883650000 -OutFile c:\oldcert.pfx
+
+#>
+function Save-SafeguardAdministeredCertificateHistory
+{
+    [CmdletBinding(DefaultParameterSetName="None")]
+    Param(
+        [Parameter(Mandatory=$false)]
+        [string]$Appliance,
+        [Parameter(Mandatory=$false)]
+        [object]$AccessToken,
+        [Parameter(Mandatory=$false)]
+        [switch]$Insecure,
+        [Parameter(Mandatory=$true,Position=0)]
+        [int]$CertificateId,
+        [Parameter(Mandatory=$true,Position=1)]
+        [long]$EventId,
+        [Parameter(Mandatory=$true,Position=2)]
+        [string]$OutFile
+    )
+
+    if (-not $PSBoundParameters.ContainsKey("ErrorAction")) { $ErrorActionPreference = "Stop" }
+    if (-not $PSBoundParameters.ContainsKey("Verbose")) { $VerbosePreference = $PSCmdlet.GetVariableValue("VerbosePreference") }
+
+    Invoke-SafeguardMethod -AccessToken $AccessToken -Appliance $Appliance -Insecure:$Insecure Core `
+        GET "Me/Certificates/$($CertificateId)/CertificateHistory/$($EventId)/Download" -OutFile $OutFile
+    Write-Host "Historical certificate saved to '$OutFile'"
 }

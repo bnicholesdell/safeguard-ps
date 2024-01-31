@@ -125,6 +125,11 @@ FunctionsToExport = @(
     'Set-SafeguardSslCertificateForAppliance','Clear-SafeguardSslCertificateForAppliance','Get-SafeguardSslCertificateForAppliance',
     'Get-SafeguardCertificateSigningRequest','New-SafeguardCertificateSigningRequest','Remove-SafeguardCertificateSigningRequest',
     'New-SafeguardTestCertificatePki',
+    'New-SafeguardAdministeredCertificateSigningRequest','Get-SafeguardAdministeredCertificateSigningRequest','Edit-SafeguardAdministeredCertificateSigningRequest','Remove-SafeguardAdministeredCertificateSigningRequest',
+    'New-SafeguardAdministeredCertificate','Get-SafeguardAdministeredCertificate','Edit-SafeguardAdministeredCertificate','Remove-SafeguardAdministeredCertificate',
+    'New-SafeguardAdministeredCertificateShare','Get-SafeguardAdministeredCertificateShare','Edit-SafeguardAdministeredCertificateShare','Remove-SafeguardAdministeredCertificateShare',
+    'Get-SafeguardAdministeredCertificateHistory', 'Save-SafeguardAdministeredCertificateHistory',
+    'Save-SafeguardAdministeredCertificate',
     # networking.psm1
     'Get-SafeguardNetworkInterface','Set-SafeguardNetworkInterface','Get-SafeguardDnsSuffix','Set-SafeguardDnsSuffix',
     # maintenance.psm1
